@@ -17,6 +17,7 @@
 #include "driver/spi_master.h"
 #include "soc/gpio_struct.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 spi_device_handle_t spi;
 
 /*
@@ -53,7 +54,7 @@ spi_device_handle_t spi;
 
 typedef struct {
     uint8_t cmd;
-    uint8_t data[16];
+    uint8_t data[128];
     uint8_t databytes; //No of data in data; bit 7 = delay after set; 0xFF = end of cmds.
 } lcd_init_cmd_t;
 
@@ -98,6 +99,7 @@ typedef enum {
 /*     {0, {0}, 0xff} */
 /* }; */
 
+#if 0
 DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[]={
     /* Power contorl B, power control = 0, DC_ENA = 1 */
     {0xCF, {0x00, 0x83, 0X30}, 3},
@@ -157,6 +159,49 @@ DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[]={
     {0x29, {0}, 0x80},
     {0, {0}, 0xff},
 };
+#else
+#define TFT_CMD_SWRESET	0x01
+#define TFT_CMD_SLEEP 0x10
+#define TFT_CMD_DISPLAY_OFF 0x28
+
+#define MADCTL_MY  0x80
+#define MADCTL_MX  0x40
+#define MADCTL_MV  0x20
+#define MADCTL_ML  0x10
+#define MADCTL_MH 0x04
+#define TFT_RGB_BGR 0x08
+
+DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[] = {
+    {TFT_CMD_SWRESET, {0}, 0x80},
+    {0xCF, {0x00, 0xc3, 0x30}, 3},
+    {0xED, {0x64, 0x03, 0x12, 0x81}, 4},
+    {0xE8, {0x85, 0x00, 0x78}, 3},
+    {0xCB, {0x39, 0x2c, 0x00, 0x34, 0x02}, 5},
+    {0xF7, {0x20}, 1},
+    {0xEA, {0x00, 0x00}, 2},
+    {0xC0, {0x1B}, 1},    //Power control   //VRH[5:0]
+    {0xC1, {0x12}, 1},    //Power control   //SAP[2:0];BT[3:0]
+    {0xC5, {0x32, 0x3C}, 2},    //VCM control
+    {0xC7, {0x91}, 1},    //VCM control2
+    {0x36, {(MADCTL_MV | MADCTL_MY | TFT_RGB_BGR)}, 1},    // Memory Access Control
+    {0x3A, {0x55}, 1},
+    {0xB1, {0x00, 0x1B}, 2},  // Frame Rate Control (1B=70, 1F=61, 10=119)
+    {0xB6, {0x0A, 0xA2}, 2},    // Display Function Control
+    {0xF6, {0x01, 0x30}, 2},
+    {0xF2, {0x00}, 1},    // 3Gamma Function Disable
+    {0x26, {0x01}, 1},     //Gamma curve selected
+
+    //Set Gamma
+    {0xE0, {0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00}, 15},
+    {0XE1, {0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F}, 15},
+
+    {0x11, {0}, 0x80},    //Exit Sleep
+    {0x29, {0}, 0x80},    //Display on
+
+    {0, {0}, 0xff}
+};
+
+#endif
 
 //Send a command to the LCD. Uses spi_device_transmit, which waits until the transfer is complete.
 void lcd_cmd(spi_device_handle_t spi, const uint8_t cmd)
@@ -369,6 +414,54 @@ uint32_t lcd_get_id(spi_device_handle_t spi)
 #define ILI9341_MADCTL_BGR 0x08
 #define ILI9341_MADCTL_MH  0x04
 
+static void backlight_init()
+{
+    // (duty range is 0 ~ ((2**bit_num)-1)
+    const int DUTY_MAX = 0x1fff;
+
+    //configure timer0
+    ledc_timer_config_t ledc_timer;
+    memset(&ledc_timer, 0, sizeof(ledc_timer));
+
+    ledc_timer.bit_num = LEDC_TIMER_13_BIT; //set timer counter bit number
+    ledc_timer.freq_hz = 5000;              //set frequency of pwm
+    ledc_timer.speed_mode = LEDC_LOW_SPEED_MODE;   //timer mode,
+    ledc_timer.timer_num = LEDC_TIMER_0;    //timer index
+
+
+    ledc_timer_config(&ledc_timer);
+
+
+    //set the configuration
+    ledc_channel_config_t ledc_channel;
+    memset(&ledc_channel, 0, sizeof(ledc_channel));
+
+    //set LEDC channel 0
+    ledc_channel.channel = LEDC_CHANNEL_0;
+    //set the duty for initialization.(duty range is 0 ~ ((2**bit_num)-1)
+    ledc_channel.duty = 0;
+    //GPIO number
+    ledc_channel.gpio_num = PIN_NUM_BCKL;
+    //GPIO INTR TYPE, as an example, we enable fade_end interrupt here.
+    ledc_channel.intr_type = LEDC_INTR_FADE_END;
+    //set LEDC mode, from ledc_mode_t
+    ledc_channel.speed_mode = LEDC_LOW_SPEED_MODE;
+    //set LEDC timer source, if different channel use one timer,
+    //the frequency and bit_num of these channels should be the same
+    ledc_channel.timer_sel = LEDC_TIMER_0;
+
+
+    ledc_channel_config(&ledc_channel);
+
+
+    //initialize fade service.
+    ledc_fade_func_install(0);
+
+    // duty range is 0 ~ ((2**bit_num)-1)
+    ledc_set_fade_with_time(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, DUTY_MAX, 500);
+    ledc_fade_start(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, LEDC_FADE_NO_WAIT);
+}
+
 //Initialize the display
 void lcd_init(spi_device_handle_t spi)
 {
@@ -386,8 +479,7 @@ void lcd_init(spi_device_handle_t spi)
     // gpio_set_level(PIN_NUM_RST, 1);
     // vTaskDelay(150 / portTICK_RATE_MS);
 
-    gpio_set_direction(PIN_NUM_BCKL, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_NUM_BCKL, 1);
+    backlight_init();
 
 #ifndef ILI9341
     lcd_cmd(spi,0xEF);
@@ -1093,13 +1185,13 @@ void app_main()
     //Initialize the LCD
     lcd_init(spi);
 
-    gpio_set_direction(32, GPIO_MODE_OUTPUT);
+    // gpio_set_direction(32, GPIO_MODE_OUTPUT);
  
-    gpio_set_level(32,1);
+    // gpio_set_level(32,1);
 
-    gpio_set_direction(37, GPIO_MODE_INPUT);
-    gpio_set_direction(38, GPIO_MODE_INPUT);
-    gpio_set_direction(39, GPIO_MODE_INPUT);
+    // gpio_set_direction(37, GPIO_MODE_INPUT);
+    // gpio_set_direction(38, GPIO_MODE_INPUT);
+    // gpio_set_direction(39, GPIO_MODE_INPUT);
 
     
     /* //Initialize the effect displayed */
