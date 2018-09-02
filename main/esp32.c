@@ -32,10 +32,11 @@ spi_device_handle_t spi;
 #define PIN_NUM_MISO 19
 #define PIN_NUM_MOSI 23
 #define PIN_NUM_CLK  18
-#define PIN_NUM_CS   14
+#define PIN_NUM_CS   5
 
-#define PIN_NUM_DC   27
-#define PIN_NUM_RST  33
+#define PIN_NUM_DC   21
+#define PIN_NUM_RST  -1
+#define PIN_NUM_BCKL 14
 
 //To speed up transfers, every SPI transfer sends a bunch of lines. This define specifies how many. More means more memory use,
 //but less overhead for setting up / finishing transfers. Make sure 240 is dividable by this.
@@ -377,13 +378,16 @@ void lcd_init(spi_device_handle_t spi)
 
     //Initialize non-SPI GPIOs
     gpio_set_direction(PIN_NUM_DC, GPIO_MODE_OUTPUT);
-    gpio_set_direction(PIN_NUM_RST, GPIO_MODE_OUTPUT);
+    //gpio_set_direction(PIN_NUM_RST, GPIO_MODE_OUTPUT);
+    
+    // //Reset the display
+    // gpio_set_level(PIN_NUM_RST, 0);
+    // vTaskDelay(100 / portTICK_RATE_MS);
+    // gpio_set_level(PIN_NUM_RST, 1);
+    // vTaskDelay(150 / portTICK_RATE_MS);
 
-    //Reset the display
-    gpio_set_level(PIN_NUM_RST, 0);
-    vTaskDelay(100 / portTICK_RATE_MS);
-    gpio_set_level(PIN_NUM_RST, 1);
-    vTaskDelay(150 / portTICK_RATE_MS);
+    gpio_set_direction(PIN_NUM_BCKL, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_NUM_BCKL, 1);
 
 #ifndef ILI9341
     lcd_cmd(spi,0xEF);
